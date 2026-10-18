@@ -1,0 +1,236 @@
+module Tokenization.TokenPosition where
+
+import Common.Types
+import Deposits.DepositAgreement
+import Governance.Approval
+import Internal.Authorization
+import qualified Products.DepositProduct as Product
+
+-- One bank-controlled register per agreement bounds aggregate active
+-- representations. The trusted workflow creates it alongside the agreement
+-- and reconciles its balance with authoritative core-banking records.
+template TokenizationRegister
+  with
+    issuer : Party
+    agreementRef : Text
+    agreementId : ContractId DepositAgreement
+    productVersion : Text
+    currency : CurrencyCode
+    authorizedPrincipal : Decimal
+    outstandingAmount : Decimal
+  where
+    signatory issuer
+    ensure agreementRef /= ""
+      && productVersion /= ""
+      && currency /= ""
+      && authorizedPrincipal > 0.0
+      && outstandingAmount >= 0.0
+      && outstandingAmount <= authorizedPrincipal
+    choice IncreaseOutstanding : ContractId TokenizationRegister
+      with
+        amount : Decimal
+      controller issuer
+      do
+        assertMsg "Issuance amount must be positive" (amount > 0.0)
+        assertMsg "Issuance would exceed the authorized deposit principal"
+          (outstandingAmount + amount <= authorizedPrincipal)
+        create this with outstandingAmount = outstandingAmount + amount
+
+    choice DecreaseOutstanding : ContractId TokenizationRegister
+      with
+        amount : Decimal
+      controller issuer
+      do
+        assertMsg "Redemption amount must be positive" (amount > 0.0)
+        assertMsg "Redemption exceeds outstanding tokenized amount" (amount <= outstandingAmount)
+        create this with outstandingAmount = outstandingAmount - amount
+
+template TokenPosition
+  with
+    issuer : Party
+    owner : Party
+    agreementId : ContractId DepositAgreement
+    registerId : ContractId TokenizationRegister
+    productVersion : Text
+    currency : CurrencyCode
+    positionRef : Text
+    amount : Decimal
+    transferable : Bool
+    status : PositionStatus
+  where
+    signatory issuer, owner
+    ensure productVersion /= ""
+      && currency /= ""
+      && positionRef /= ""
+      && amount > 0.0
+    -- Transfer is atomic at the ledger boundary. The recipient explicitly
+    -- authorizes the command; the bank and an independent checker also act.
+    -- Eligibility evidence and digest canonicalization are supplied by the
+    -- trusted workflow boundary and are not performed by this contract.
+    choice Transfer : (ContractId TokenPosition, Optional (ContractId TokenPosition))
+      with
+        newOwner : Party
+        transferAmount : Decimal
+        newPositionRef : Text
+        operationId : OperationId
+        payloadDigest : Text
+        checker : Party
+        approvalId : ContractId ApprovalEvidence
+        operationRegistryId : ContractId OperationRegistry
+      controller issuer, owner, newOwner, checker
+      do
+        assertMsg "Position is not active" (status == PositionActive)
+        assertMsg "Product does not permit transfers" transferable
+        assertMsg "Recipient must differ from current holder" (newOwner /= owner)
+        assertMsg "Recipient must differ from issuing bank" (newOwner /= issuer)
+        assertMsg "Checker must be independent of issuer and participants"
+          (checker /= issuer && checker /= owner && checker /= newOwner)
+        assertMsg "Transfer amount must be positive and no greater than position amount"
+          (transferAmount > 0.0 && transferAmount <= amount)
+        assertMsg "Destination position reference is required" (newPositionRef /= "")
+        assertOperation operationRegistryId issuer operationId "TRANSFER" payloadDigest
+
+        deposit <- fetch agreementId
+        assertMsg "Deposit agreement is not active" (deposit.status == DepositActive)
+        assertMsg "Position does not match its deposit agreement"
+          (deposit.issuer == issuer
+            && deposit.productVersion == productVersion
+            && deposit.currency == currency)
+        product <- fetch deposit.productId
+        assertMsg "Product version is not active or transferable"
+          (product.status == ProductActive
+            && product.transferable
+            && product.productVersion == productVersion)
+        register <- fetch registerId
+        assertMsg "Tokenization register does not match the agreement"
+          (register.issuer == issuer
+            && register.agreementId == agreementId
+            && register.agreementRef == deposit.agreementRef
+            && register.productVersion == productVersion
+            && register.currency == currency)
+
+        consumeApproval approvalId issuer owner checker operationId "TRANSFER"
+          positionRef productVersion (Some transferAmount) (Some currency)
+          (Some newOwner) payloadDigest
+
+        recipientPosition <- create this with
+          owner = newOwner
+          positionRef = newPositionRef
+          amount = transferAmount
+        remainder <- if transferAmount < amount
+          then do
+            remaining <- create this with
+              positionRef = positionRef <> "/remaining/" <> operationId
+              amount = amount - transferAmount
+            pure (Some remaining)
+          else pure None
+        pure (recipientPosition, remainder)
+
+    choice Freeze : ContractId TokenPosition
+      with
+        operationId : OperationId
+        payloadDigest : Text
+        checker : Party
+        approvalId : ContractId ApprovalEvidence
+        operationRegistryId : ContractId OperationRegistry
+      controller issuer, owner, checker
+      do
+        assertMsg "Only an active position can be frozen" (status == PositionActive)
+        assertMsg "Checker must be independent" (checker /= issuer && checker /= owner)
+        assertOperation operationRegistryId issuer operationId "POSITION_FREEZE" payloadDigest
+        consumeApproval approvalId issuer issuer checker operationId "POSITION_FREEZE"
+          positionRef productVersion None None None payloadDigest
+        create this with status = PositionFrozen
+
+    choice Unfreeze : ContractId TokenPosition
+      with
+        operationId : OperationId
+        payloadDigest : Text
+        checker : Party
+        approvalId : ContractId ApprovalEvidence
+        operationRegistryId : ContractId OperationRegistry
+      controller issuer, owner, checker
+      do
+        assertMsg "Only a frozen position can be unfrozen" (status == PositionFrozen)
+        assertMsg "Checker must be independent" (checker /= issuer && checker /= owner)
+        assertOperation operationRegistryId issuer operationId "POSITION_UNFREEZE" payloadDigest
+        consumeApproval approvalId issuer issuer checker operationId "POSITION_UNFREEZE"
+          positionRef productVersion None None None payloadDigest
+        create this with status = PositionActive
+
+    choice RequestRedemption : (ContractId RedemptionClaim, Optional (ContractId TokenPosition))
+      with
+        redemptionAmount : Decimal
+        redemptionRef : Text
+        operationId : OperationId
+        payloadDigest : Text
+        checker : Party
+        approvalId : ContractId ApprovalEvidence
+        operationRegistryId : ContractId OperationRegistry
+      controller issuer, owner, checker
+      do
+        assertMsg "Position is not active" (status == PositionActive)
+        assertMsg "Redemption amount must be positive and no greater than position amount"
+          (redemptionAmount > 0.0 && redemptionAmount <= amount)
+        assertMsg "Redemption reference is required" (redemptionRef /= "")
+        assertMsg "Checker must be independent" (checker /= issuer && checker /= owner)
+        assertOperation operationRegistryId issuer operationId "REDEMPTION" payloadDigest
+
+        deposit <- fetch agreementId
+        assertMsg "Deposit agreement is not active" (deposit.status == DepositActive)
+        assertMsg "Position does not match its deposit agreement"
+          (deposit.issuer == issuer
+            && deposit.productVersion == productVersion
+            && deposit.currency == currency)
+        register <- fetch registerId
+        assertMsg "Tokenization register does not match the agreement"
+          (register.issuer == issuer
+            && register.agreementId == agreementId
+            && register.agreementRef == deposit.agreementRef
+            && register.productVersion == productVersion
+            && register.currency == currency
+            && register.outstandingAmount >= redemptionAmount)
+        product <- fetch deposit.productId
+        assertMsg "Product does not permit redemption under this agreement"
+          (product.status == ProductActive
+            && product.productVersion == productVersion)
+
+        consumeApproval approvalId issuer owner checker operationId "REDEMPTION"
+          positionRef productVersion (Some redemptionAmount) (Some currency) None payloadDigest
+
+        claim <- create RedemptionClaim with
+          issuer
+          owner
+          agreementId
+          productVersion
+          currency
+          redemptionRef
+          operationId
+          amount = redemptionAmount
+        exercise registerId DecreaseOutstanding with amount = redemptionAmount
+        remainder <- if redemptionAmount < amount
+          then do
+            remaining <- create this with
+              positionRef = positionRef <> "/remaining/" <> operationId
+              amount = amount - redemptionAmount
+            pure (Some remaining)
+          else pure None
+        pure (claim, remainder)
+
+template RedemptionClaim
+  with
+    issuer : Party
+    owner : Party
+    agreementId : ContractId DepositAgreement
+    productVersion : Text
+    currency : CurrencyCode
+    redemptionRef : Text
+    operationId : OperationId
+    amount : Decimal
+  where
+    signatory issuer, owner
+    ensure productVersion /= ""
+      && currency /= ""
+      && redemptionRef /= ""
+      && operationId /= ""
+      && amount > 0.0

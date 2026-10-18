@@ -1,0 +1,73 @@
+module Deposits.DepositPosition where
+
+import Common.Types
+import Deposits.DepositAgreement
+
+-- A position is the eligible digital representation of an agreed deposit.
+-- Only the current holder may offer it, and the receiving party must accept
+-- before it changes hands. Amount, status, and transferability are contractual
+-- facts; availability, holds, and payout remain off-ledger.
+template DepositPosition
+  with
+    issuer : Party
+    holder : Party
+    agreementId : ContractId DepositAgreement
+    positionRef : Text
+    currency : CurrencyCode
+    amount : Decimal
+    transferable : Bool
+    status : PositionStatus
+  where
+    signatory issuer, holder
+    ensure positionRef /= ""
+      && currency /= ""
+      && amount > 0.0
+
+    choice OfferTransfer : ContractId TransferOffer
+      with
+        newHolder : Party
+        operationId : OperationId
+      controller holder
+      do
+        assertMsg "Position is not transferable" transferable
+        assertMsg "Position is not active" (status == PositionActive)
+        assertMsg "Recipient must differ from the current holder" (newHolder /= holder)
+        assertMsg "Operation id is required" (operationId /= "")
+        create TransferOffer with
+          issuer
+          holder
+          newHolder
+          positionId = self
+          operationId
+
+-- The holder's offer to transfer the position. The recipient accepts; the bank
+-- (issuer) is a signatory so it authorizes the resulting position and can
+-- withdraw the offer where policy requires. The predecessor position is
+-- consumed only on acceptance.
+template TransferOffer
+  with
+    issuer : Party
+    holder : Party
+    newHolder : Party
+    positionId : ContractId DepositPosition
+    operationId : OperationId
+  where
+    signatory issuer, holder
+    observer newHolder
+    ensure operationId /= ""
+
+    choice Accept : ContractId DepositPosition
+      controller newHolder
+      do
+        position <- fetch positionId
+        assertMsg "Position is not active" (position.status == PositionActive)
+        archive positionId
+        create position with holder = newHolder
+
+    choice Reject : ()
+      controller newHolder
+      do pure ()
+
+    choice Withdraw : ()
+      controller holder
+      do pure ()

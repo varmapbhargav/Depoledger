@@ -1,0 +1,56 @@
+module Treasury.FundingProposal where
+
+import Common.Types
+import Governance.Approval
+import Internal.Authorization
+
+data FundingStatus
+  = FundingProposed
+  | FundingApproved
+  | FundingRejected
+  deriving (Eq, Show)
+
+-- Governed funding proposal. A dealer proposes and a separate manager approves
+-- against a checker-signed approval; the terms digest, policy version, and
+-- settlement reference connect the ledger record to off-ledger execution. No
+-- external funding action is performed here.
+template FundingProposal
+  with
+    issuer : Party
+    dealer : Party
+    manager : Party
+    counterparty : Party
+    operationId : OperationId
+    currency : CurrencyCode
+    amount : Decimal
+    rate : Decimal
+    maturityDate : Date
+    termsDigest : Text
+    policyVersion : Text
+    status : FundingStatus
+  where
+    signatory issuer, dealer
+    observer manager
+    ensure operationId /= ""
+      && currency /= ""
+      && amount > 0.0
+      && termsDigest /= ""
+      && policyVersion /= ""
+      && dealer /= manager
+
+    choice Approve : ContractId FundingProposal
+      with
+        payloadDigest : Text
+        approvalId : ContractId ApprovalEvidence
+      controller manager
+      do
+        consumeApproval approvalId issuer dealer manager operationId "FUNDING_APPROVAL"
+          termsDigest policyVersion (Some amount) (Some currency) (Some counterparty) payloadDigest
+        archive self
+        create this with status = FundingApproved
+
+    choice Reject : ContractId FundingProposal
+      controller manager
+      do
+        archive self
+        create this with status = FundingRejected

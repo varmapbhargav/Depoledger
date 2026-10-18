@@ -1,0 +1,29 @@
+module Settlement.SettlementEvidence where
+
+import Common.Types
+
+-- External instruction/confirmation references and settlement state. This
+-- template never executes an external payment; it records governed references
+-- supplied by trusted adapters and systems of record.
+template SettlementEvidence
+  with
+    issuer : Party
+    operationId : OperationId
+    settlementRef : Text
+    evidenceDigest : Text
+    status : SettlementStatus
+  where
+    signatory issuer
+    ensure operationId /= ""
+      && settlementRef /= ""
+      && evidenceDigest /= ""
+
+    choice RecordUpdate : ContractId SettlementEvidence
+      with
+        newStatus : SettlementStatus
+        newEvidenceDigest : Text
+      controller issuer
+      do
+        assertMsg "Evidence digest is required" (newEvidenceDigest /= "")
+        archive self
+        create this with status = newStatus, evidenceDigest = newEvidenceDigest

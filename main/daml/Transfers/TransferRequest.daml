@@ -1,0 +1,60 @@
+module Transfers.TransferRequest where
+
+import Common.Types
+import Governance.Approval
+import Internal.Authorization
+import Deposits.DepositAgreement
+import Deposits.DepositPosition
+
+data TransferStatus
+  = TransferPending
+  | TransferOffered
+  | TransferRejected
+  deriving (Eq, Show)
+
+-- Transfer case and operation evidence around the position offer/acceptance.
+-- Executing it records the case, consumes the bound approval and operation
+-- reservation, and creates the position-level offer. Actual hand-over still
+-- requires the recipient to accept the offer off-ledger-visible contract.
+template TransferRequest
+  with
+    issuer : Party
+    holder : Party
+    operationId : OperationId
+    positionId : ContractId DepositPosition
+    recipient : Party
+    amount : Decimal
+    currency : CurrencyCode
+    status : TransferStatus
+  where
+    signatory issuer, holder
+    ensure operationId /= ""
+      && amount > 0.0
+      && currency /= ""
+
+    choice Execute : ContractId TransferOffer
+      with
+        registryId : ContractId OperationRegistry
+        payloadDigest : Text
+        checker : Party
+        approvalId : ContractId ApprovalEvidence
+      controller issuer, holder, checker
+      do
+        assertOperation registryId issuer operationId "TRANSFER" payloadDigest
+        position <- fetch positionId
+        agreementC <- fetch position.agreementId
+        assertMsg "Position is not active" (position.status == PositionActive)
+        assertMsg "Position currency mismatch" (position.currency == currency)
+        assertMsg "Only a full-position transfer is supported" (amount == position.amount)
+        assertMsg "Recipient must differ from the current holder" (recipient /= holder)
+        consumeApproval approvalId issuer issuer checker operationId "TRANSFER"
+          position.positionRef agreementC.productVersion (Some amount) (Some currency) (Some recipient) payloadDigest
+        offerId <- exercise positionId (OfferTransfer with newHolder = recipient, operationId = operationId)
+        archive self
+        pure offerId
+
+    choice RejectRequest : ContractId TransferRequest
+      controller issuer, holder
+      do
+        archive self
+        create this with status = TransferRejected

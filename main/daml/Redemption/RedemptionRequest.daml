@@ -1,0 +1,64 @@
+module Redemption.RedemptionRequest where
+
+import Common.Types
+import Governance.Approval
+import Internal.Authorization
+import Deposits.DepositAgreement
+import Deposits.DepositPosition
+
+data RedemptionStatus
+  = RedemptionPending
+  | RedemptionCompleted
+  | RedemptionRejected
+  deriving (Eq, Show)
+
+-- Single-use redemption request. Executing it consumes the bound approval and
+-- operation reservation and retires the position in whole or in part. Its
+-- status is distinct from payout settlement, which is tracked separately by
+-- settlement evidence. Only the ledger representation is retired here.
+template RedemptionRequest
+  with
+    issuer : Party
+    holder : Party
+    operationId : OperationId
+    positionId : ContractId DepositPosition
+    amount : Decimal
+    currency : CurrencyCode
+    status : RedemptionStatus
+  where
+    signatory issuer, holder
+    ensure operationId /= ""
+      && amount > 0.0
+      && currency /= ""
+
+    choice Execute : Optional (ContractId DepositPosition)
+      with
+        registryId : ContractId OperationRegistry
+        payloadDigest : Text
+        checker : Party
+        approvalId : ContractId ApprovalEvidence
+      controller issuer, holder, checker
+      do
+        assertOperation registryId issuer operationId "REDEMPTION" payloadDigest
+        position <- fetch positionId
+        agreementC <- fetch position.agreementId
+        assertMsg "Position is not active" (position.status == PositionActive)
+        assertMsg "Position holder mismatch" (position.holder == holder)
+        assertMsg "Position currency mismatch" (position.currency == currency)
+        assertMsg "Redemption exceeds position amount" (amount <= position.amount)
+        consumeApproval approvalId issuer issuer checker operationId "REDEMPTION"
+          position.positionRef agreementC.productVersion (Some amount) (Some currency) (Some holder) payloadDigest
+        archive positionId
+        residual <- if amount == position.amount
+          then pure None
+          else do
+            residualId <- create position with amount = position.amount - amount
+            pure (Some residualId)
+        archive self
+        pure residual
+
+    choice RejectRequest : ContractId RedemptionRequest
+      controller issuer, holder
+      do
+        archive self
+        create this with status = RedemptionRejected

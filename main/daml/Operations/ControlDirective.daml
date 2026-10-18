@@ -1,0 +1,48 @@
+module Operations.ControlDirective where
+
+import Common.Types
+import Governance.Approval
+import Internal.Authorization
+
+data DirectiveType
+  = PauseOperations
+  | RestrictOperations
+  deriving (Eq, Show)
+
+data DirectiveStatus
+  = DirectiveActive
+  | DirectiveLifted
+  deriving (Eq, Show)
+
+-- Scoped pause/restriction directive with review evidence. This grants no
+-- infrastructure administration: it records a narrowly scoped, dual-controlled
+-- operational instruction. Lifting requires a checker-signed approval.
+template ControlDirective
+  with
+    issuer : Party
+    authority : Party
+    directiveRef : Text
+    directiveType : DirectiveType
+    scope : Text
+    reasonDigest : Text
+    policyVersion : Text
+    status : DirectiveStatus
+  where
+    signatory issuer, authority
+    ensure directiveRef /= ""
+      && scope /= ""
+      && reasonDigest /= ""
+      && policyVersion /= ""
+
+    choice Lift : ContractId ControlDirective
+      with
+        reviewDigest : Text
+        checker : Party
+        approvalId : ContractId ApprovalEvidence
+        payloadDigest : Text
+      controller issuer, authority, checker
+      do
+        assertMsg "Review evidence is required" (reviewDigest /= "")
+        consumeApproval approvalId issuer authority checker directiveRef "CONTROL_DIRECTIVE_LIFT"
+          scope policyVersion None None None payloadDigest
+        create this with status = DirectiveLifted

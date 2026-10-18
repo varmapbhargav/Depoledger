@@ -1,0 +1,35 @@
+module Transfers.TransferEvent where
+
+import Common.Types
+
+-- Immutable workflow evidence for a transfer. Position value movement is
+-- implemented by Tokenization.TokenPosition.Transfer; integration and
+-- settlement progress remain independent workflow state.
+data TransferEventType
+  = TransferSubmitted
+  | TransferLedgerExecuted
+  | TransferSettlementUpdated
+  | TransferReconciled
+  | TransferExceptionRaised
+  deriving (Eq, Show)
+
+template TransferEvent
+  with
+    issuer : Party
+    eventId : Text
+    operationId : OperationId
+    fromOwner : Party
+    toOwner : Party
+    currency : CurrencyCode
+    amount : Decimal
+    eventType : TransferEventType
+    evidenceDigest : Text
+  where
+    signatory issuer
+    observer fromOwner, toOwner
+    ensure eventId /= ""
+      && operationId /= ""
+      && fromOwner /= toOwner
+      && currency /= ""
+      && amount > 0.0
+      && evidenceDigest /= ""

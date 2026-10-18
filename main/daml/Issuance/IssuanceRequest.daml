@@ -1,0 +1,76 @@
+module Issuance.IssuanceRequest where
+
+import Common.Types
+import Governance.Approval
+import Internal.Authorization
+import qualified Products.DepositProduct as Product
+import Deposits.DepositAgreement
+import Deposits.DepositPosition
+
+data IssuanceStatus
+  = IssuancePending
+  | IssuanceCompleted
+  | IssuanceRejected
+  deriving (Eq, Show)
+
+-- Single-use issuance request. Executing it consumes the bound approval and the
+-- permanent operation reservation, then creates exactly one position against an
+-- active product version and its agreement. It creates the ledger
+-- representation only; funding, entitlement, and reconciliation evidence remain
+-- off-ledger.
+template IssuanceRequest
+  with
+    issuer : Party
+    requester : Party
+    holder : Party
+    operationId : OperationId
+    agreementId : ContractId DepositAgreement
+    productId : ContractId Product.DepositProduct
+    positionRef : Text
+    currency : CurrencyCode
+    amount : Decimal
+    status : IssuanceStatus
+  where
+    signatory issuer, requester
+    ensure operationId /= ""
+      && positionRef /= ""
+      && currency /= ""
+      && amount > 0.0
+
+    choice Execute : ContractId DepositPosition
+      with
+        registryId : ContractId OperationRegistry
+        payloadDigest : Text
+        checker : Party
+        approvalId : ContractId ApprovalEvidence
+      controller issuer, holder, checker
+      do
+        assertOperation registryId issuer operationId "ISSUANCE" payloadDigest
+        product <- fetch productId
+        agreementC <- fetch agreementId
+        assertMsg "Product is not active" (product.status == ProductActive)
+        assertMsg "Product currency mismatch" (product.currency == currency)
+        assertMsg "Agreement does not reference this product" (agreementC.productId == productId)
+        assertMsg "Agreement product version mismatch" (agreementC.productVersion == product.productVersion)
+        assertMsg "Agreement currency mismatch" (agreementC.currency == currency)
+        assertMsg "Amount below product minimum" (amount >= product.minimumPrincipal)
+        assertMsg "Amount above product maximum" (amount <= product.maximumPrincipal)
+        consumeApproval approvalId issuer issuer checker operationId "ISSUANCE"
+          positionRef product.productVersion (Some amount) (Some currency) (Some holder) payloadDigest
+        positionId <- create DepositPosition with
+          issuer
+          holder
+          agreementId
+          positionRef
+          currency
+          amount
+          transferable = product.transferable
+          status = PositionActive
+        archive self
+        pure positionId
+
+    choice RejectRequest : ContractId IssuanceRequest
+      controller issuer, holder
+      do
+        archive self
+        create this with status = IssuanceRejected

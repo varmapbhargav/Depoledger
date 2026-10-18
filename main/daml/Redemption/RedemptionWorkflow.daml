@@ -1,0 +1,54 @@
+module Redemption.RedemptionWorkflow where
+
+import Common.Types
+import Governance.Approval
+import Internal.Authorization
+import Tokenization.TokenPosition
+
+data RedemptionState
+  = RedemptionPending
+  | RedemptionPayoutPending
+  | RedemptionPaid
+  | RedemptionRejected
+  | RedemptionException
+  deriving (Eq, Show)
+
+template RedemptionCase
+  with
+    issuer : Party
+    owner : Party
+    claimId : ContractId RedemptionClaim
+    agreementRef : Text
+    productVersion : Text
+    currency : CurrencyCode
+    amount : Decimal
+    operationId : OperationId
+    state : RedemptionState
+  where
+    signatory issuer
+    observer owner
+    ensure agreementRef /= ""
+      && productVersion /= ""
+      && currency /= ""
+      && amount > 0.0
+      && operationId /= ""
+
+    choice RecordOutcome : ContractId RedemptionCase
+      with
+        newState : RedemptionState
+        externalReferenceDigest : Text
+        checker : Party
+        approvalId : ContractId ApprovalEvidence
+      controller issuer, checker
+      do
+        assertMsg "Checker must be independent of issuer and owner"
+          (checker /= issuer && checker /= owner)
+        assertMsg "External reference evidence is required"
+          (externalReferenceDigest /= "")
+        assertMsg "Invalid redemption workflow transition"
+          ((state == RedemptionPending && (newState == RedemptionPayoutPending || newState == RedemptionRejected || newState == RedemptionException))
+            || (state == RedemptionPayoutPending && (newState == RedemptionPaid || newState == RedemptionException)))
+        consumeApproval approvalId issuer issuer checker operationId "REDEMPTION_OUTCOME"
+          agreementRef productVersion (Some amount) (Some currency) (Some owner)
+          externalReferenceDigest
+        create this with state = newState

@@ -1,0 +1,35 @@
+module Internal.Authorization where
+
+import Common.Types
+import Governance.Approval
+
+-- Check that the permanent ledger reservation matches the operation currently
+-- being executed. External systems must independently deduplicate this ID.
+assertOperation : ContractId OperationRegistry -> Party -> OperationId -> Text -> Text -> Update ()
+assertOperation registryId issuer operationId operationKind payloadDigest = do
+  registry <- fetch registryId
+  assertMsg "Operation registry does not match the request"
+    (registry.issuer == issuer
+      && registry.operationId == operationId
+      && registry.operationKind == operationKind
+      && registry.payloadDigest == payloadDigest)
+  exercise registryId Consume
+
+-- Check and consume a checker-signed approval in the same ledger transaction
+-- as the authorized operation so an approval cannot be reused.
+consumeApproval : ContractId ApprovalEvidence -> Party -> Party -> Party -> OperationId -> Text -> Text -> Text -> Optional Decimal -> Optional CurrencyCode -> Optional Party -> Text -> Update ()
+consumeApproval approvalId issuer maker checker operationId action subjectRef productVersion transactionAmount currency beneficiary payloadDigest = do
+  approval <- fetch approvalId
+  assertMsg "Approval evidence does not match the exact operation"
+    (approval.issuer == issuer
+      && approval.maker == maker
+      && approval.checker == checker
+      && approval.operationId == operationId
+      && approval.action == action
+      && approval.subjectRef == subjectRef
+      && approval.productVersion == productVersion
+      && approval.transactionAmount == transactionAmount
+      && approval.currency == currency
+      && approval.beneficiary == beneficiary
+      && approval.payloadDigest == payloadDigest)
+  exercise approvalId ConsumeApproval

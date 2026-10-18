@@ -1,0 +1,22 @@
+module Audit.AuditEvidence where
+
+import Common.Types
+
+-- Append-only evidence reference for a decision or external event. No consuming
+-- or mutating choices are offered; retention, lookup, and deletion policy are
+-- governed off-ledger and by the participant's archive controls.
+template AuditEvidence
+  with
+    issuer : Party
+    eventRef : Text
+    operationId : OperationId
+    actor : Party
+    eventType : Text
+    evidenceDigest : Text
+  where
+    signatory issuer
+    observer actor
+    ensure eventRef /= ""
+      && operationId /= ""
+      && eventType /= ""
+      && evidenceDigest /= ""

@@ -1,0 +1,12 @@
+module Lifecycle.StateRules where
+
+import Common.Types
+
+-- Only these transitions are supported by the current demand-deposit model.
+-- Product-specific notice, maturity, and rollover rules require separate
+-- approved state machines and must not be inferred from this helper.
+validDepositTransition : DepositStatus -> DepositStatus -> Bool
+validDepositTransition from to =
+  (from == DepositPending && (to == DepositActive || to == DepositClosed))
+    || (from == DepositActive && (to == DepositFrozen || to == DepositClosed))
+    || (from == DepositFrozen && (to == DepositActive || to == DepositClosed))

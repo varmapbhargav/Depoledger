@@ -1,0 +1,67 @@
+module Common.Types where
+
+-- Shared ledger values. Customer PII, raw account data, and external-system
+-- credentials must remain off-ledger.
+type OperationId = Text
+
+type CurrencyCode = Text
+
+data Money = Money with
+  currency : CurrencyCode
+  amount : Decimal
+
+data DepositStatus
+  = DepositPending
+  | DepositActive
+  | DepositFrozen
+  | DepositClosed
+  deriving (Eq, Show)
+
+data ProductStatus
+  = ProductActive
+  | ProductRetired
+  deriving (Eq, Show)
+
+data PositionStatus
+  = PositionActive
+  | PositionFrozen
+  deriving (Eq, Show)
+
+data SettlementStatus
+  = SettlementNotRequired
+  | SettlementPending
+  | SettlementConfirmed
+  | SettlementFailed
+  | SettlementUnknown
+  deriving (Eq, Show)
+
+data ReconciliationStatus
+  = ReconciliationOpen
+  | ReconciliationInvestigating
+  | ReconciliationResolved
+  deriving (Eq, Show)
+
+data CaseSeverity
+  = SeverityLow
+  | SeverityMedium
+  | SeverityHigh
+  | SeverityCritical
+  deriving (Eq, Show)
+
+-- This single-use capability binds one operation identity to its action and
+-- digest. It does not guarantee global uniqueness at creation time in the
+-- package's current Daml-LF 2.2 target; durable workflow idempotency is still
+-- required until the project explicitly adopts a compatible key-capable LF.
+template OperationRegistry
+  with
+    issuer : Party
+    operationId : OperationId
+    operationKind : Text
+    payloadDigest : Text
+  where
+    signatory issuer
+    ensure operationId /= "" && operationKind /= "" && payloadDigest /= ""
+
+    choice Consume : ()
+      controller issuer
+      do pure ()

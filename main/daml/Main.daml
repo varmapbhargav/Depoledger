@@ -1,0 +1,5 @@
+-- Package module entry point.
+-- DEPOLEDGER contracts live in domain modules under this source tree. Keep
+-- this module free of duplicate business logic; consumers should import the
+-- specific domain module they require.
+module Main where

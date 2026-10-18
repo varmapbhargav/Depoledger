@@ -1,0 +1,48 @@
+module Reconciliation.ReconciliationCase where
+
+import Common.Types
+import Governance.Approval
+import Internal.Authorization
+
+-- Evidence-linked discrepancy case. Records the operation reference, an owner,
+-- severity, and a reviewed resolution bound to a checker-signed approval. It
+-- does not compare systems of record itself.
+template ReconciliationCase
+  with
+    issuer : Party
+    caseRef : Text
+    operationRef : Text
+    owner : Party
+    severity : CaseSeverity
+    evidenceDigest : Text
+    policyVersion : Text
+    status : ReconciliationStatus
+  where
+    signatory issuer
+    observer owner
+    ensure caseRef /= ""
+      && operationRef /= ""
+      && evidenceDigest /= ""
+      && policyVersion /= ""
+
+    choice Reassign : ContractId ReconciliationCase
+      with
+        newOwner : Party
+      controller issuer
+      do
+        archive self
+        create this with owner = newOwner
+
+    choice Resolve : ContractId ReconciliationCase
+      with
+        resolutionDigest : Text
+        checker : Party
+        approvalId : ContractId ApprovalEvidence
+        payloadDigest : Text
+      controller issuer, checker
+      do
+        assertMsg "Resolution evidence is required" (resolutionDigest /= "")
+        consumeApproval approvalId issuer issuer checker caseRef "RECONCILIATION_RESOLUTION"
+          operationRef policyVersion None None None payloadDigest
+        archive self
+        create this with status = ReconciliationResolved, evidenceDigest = resolutionDigest

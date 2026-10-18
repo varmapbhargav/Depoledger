@@ -1,0 +1,12 @@
+sdk-version: 3.5.11
+name: depoledger-test
+source: daml
+version: 0.0.1
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+data-dependencies:
+  - ../main/.daml/dist/depoledger-main-0.0.1.dar
+build-options:
+  - --ghc-option=-Wall

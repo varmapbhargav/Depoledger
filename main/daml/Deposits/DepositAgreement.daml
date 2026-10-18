@@ -1,0 +1,42 @@
+module Deposits.DepositAgreement where
+
+import Common.Types
+import Governance.Approval
+import Internal.Authorization
+import Lifecycle.StateRules
+import qualified Products.DepositProduct as Product
+
+template DepositAgreement
+  with
+    issuer : Party
+    depositor : Party
+    agreementRef : Text
+    coreAccountRefDigest : Text
+    productId : ContractId Product.DepositProduct
+    productVersion : Text
+    currency : CurrencyCode
+    principal : Decimal
+    status : DepositStatus
+  where
+    signatory issuer, depositor
+    ensure agreementRef /= ""
+      && coreAccountRefDigest /= ""
+      && productVersion /= ""
+      && currency /= ""
+      && principal > 0.0
+      && status == DepositPending
+
+    choice ChangeStatus : ContractId DepositAgreement
+      with
+        newStatus : DepositStatus
+        operationId : OperationId
+        payloadDigest : Text
+        checker : Party
+        approvalId : ContractId ApprovalEvidence
+      controller issuer, depositor, checker
+      do
+        assertMsg "Deposit lifecycle transition is not permitted"
+          (validDepositTransition status newStatus)
+        consumeApproval approvalId issuer issuer checker operationId "DEPOSIT_STATUS_CHANGE"
+          agreementRef productVersion None None None payloadDigest
+        create this with status = newStatus

@@ -1,0 +1,30 @@
+module Products.DepositProduct where
+
+import Common.Types
+
+-- Product versions are immutable. A new terms set is a new version; do not
+-- update active agreements by mutating product data.
+template DepositProduct
+  with
+    issuer : Party
+    productGovernor : Party
+    productId : Text
+    productVersion : Text
+    currency : CurrencyCode
+    minimumPrincipal : Decimal
+    maximumPrincipal : Decimal
+    transferable : Bool
+    earlyRedemptionAllowed : Bool
+    termsDigest : Text
+    status : ProductStatus
+  where
+    signatory issuer, productGovernor
+    ensure productId /= ""
+      && productVersion /= ""
+      && currency /= ""
+      && minimumPrincipal > 0.0
+      && maximumPrincipal >= minimumPrincipal
+      && termsDigest /= ""
+    choice Retire : ContractId DepositProduct
+      controller issuer, productGovernor
+      do create this with status = ProductRetired

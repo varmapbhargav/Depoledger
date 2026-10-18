@@ -1,0 +1,36 @@
+module Maturity.MaturityInstruction where
+
+import Common.Types
+import Deposits.DepositAgreement
+
+data MaturityStatus
+  = MaturityScheduled
+  | MaturityProcessed
+  | MaturityException
+  deriving (Eq, Show)
+
+-- Versioned maturity/accrual/renewal instruction evidence. Accrual and interest
+-- calculations remain off-ledger; this template holds the approved instruction
+-- reference and its outcome state only.
+template MaturityInstruction
+  with
+    issuer : Party
+    agreementId : ContractId DepositAgreement
+    instructionRef : Text
+    instructionVersion : Text
+    maturityDate : Date
+    instructionDigest : Text
+    status : MaturityStatus
+  where
+    signatory issuer
+    ensure instructionRef /= ""
+      && instructionVersion /= ""
+      && instructionDigest /= ""
+
+    choice RecordOutcome : ContractId MaturityInstruction
+      with
+        newStatus : MaturityStatus
+      controller issuer
+      do
+        archive self
+        create this with status = newStatus

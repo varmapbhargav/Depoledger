@@ -1,0 +1,33 @@
+module Governance.Approval where
+
+import Common.Types
+
+-- A single-use, checker-signed attestation over the exact instruction. The
+-- application must compute payloadDigest from a canonical representation and
+-- authenticate the checker; the ledger compares the supplied values exactly.
+template ApprovalEvidence
+  with
+    issuer : Party
+    maker : Party
+    checker : Party
+    operationId : OperationId
+    action : Text
+    subjectRef : Text
+    productVersion : Text
+    transactionAmount : Optional Decimal
+    currency : Optional CurrencyCode
+    beneficiary : Optional Party
+    payloadDigest : Text
+  where
+    signatory checker
+    observer issuer
+    ensure maker /= checker
+      && operationId /= ""
+      && action /= ""
+      && subjectRef /= ""
+      && productVersion /= ""
+      && payloadDigest /= ""
+
+    choice ConsumeApproval : ()
+      controller checker
+      do pure ()
